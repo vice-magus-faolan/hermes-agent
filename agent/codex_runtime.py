@@ -185,13 +185,14 @@ def run_codex_stream(agent, api_kwargs: dict, client: Any = None, on_first_delta
     has_tool_calls = False
     first_delta_fired = False
     # Accumulate streamed text so we can recover if get_final_response()
-    # returns empty output (e.g. chatgpt.com backend-api sends
-    # response.incomplete instead of response.completed).
+    # returns empty output or the SDK fails to parse a terminal response
+    # whose output is null.
     agent._codex_streamed_text_parts: list = []
     for attempt in range(max_stream_retries + 1):
         if agent._interrupt_requested:
             raise InterruptedError("Agent interrupted before Codex stream retry")
         collected_output_items: list = []
+        terminal_response = None
         try:
             with active_client.responses.stream(**api_kwargs) as stream:
                 for event in stream:
@@ -234,24 +235,42 @@ def run_codex_stream(agent, api_kwargs: dict, client: Any = None, on_first_delta
                         done_item = getattr(event, "item", None)
                         if done_item is not None:
                             collected_output_items.append(done_item)
-                    # Log non-completed terminal events for diagnostics
-                    elif event_type in {"response.incomplete", "response.failed"}:
+                    # Keep the terminal response object from stream events so
+                    # we can recover when the SDK later fails to parse it.
+                    elif event_type in {"response.completed", "response.incomplete", "response.failed"}:
                         resp_obj = getattr(event, "response", None)
-                        status = getattr(resp_obj, "status", None) if resp_obj else None
-                        incomplete_details = getattr(resp_obj, "incomplete_details", None) if resp_obj else None
-                        logger.warning(
-                            "Codex Responses stream received terminal event %s "
-                            "(status=%s, incomplete_details=%s, streamed_chars=%d). %s",
-                            event_type, status, incomplete_details,
-                            sum(len(p) for p in agent._codex_streamed_text_parts),
-                            agent._client_log_context(),
-                        )
-                final_response = stream.get_final_response()
-                # PATCH: ChatGPT Codex backend streams valid output items
-                # but get_final_response() can return an empty output list.
-                # Backfill from collected items or synthesize from deltas.
+                        if resp_obj is not None:
+                            terminal_response = resp_obj
+                        # Log non-completed terminal events for diagnostics
+                        if event_type in {"response.incomplete", "response.failed"}:
+                            status = getattr(resp_obj, "status", None) if resp_obj else None
+                            incomplete_details = getattr(resp_obj, "incomplete_details", None) if resp_obj else None
+                            logger.warning(
+                                "Codex Responses stream received terminal event %s "
+                                "(status=%s, incomplete_details=%s, streamed_chars=%d). %s",
+                                event_type, status, incomplete_details,
+                                sum(len(p) for p in agent._codex_streamed_text_parts),
+                                agent._client_log_context(),
+                            )
+                try:
+                    final_response = stream.get_final_response()
+                except TypeError as exc:
+                    recoverable_null_output = (
+                        str(exc) == "'NoneType' object is not iterable"
+                        and (terminal_response is not None or collected_output_items or agent._codex_streamed_text_parts)
+                    )
+                    if not recoverable_null_output:
+                        raise
+                    final_response = terminal_response or SimpleNamespace(output=None, status="completed")
+                    logger.debug(
+                        "Codex stream: recovered from null terminal output parse failure via stream backfill"
+                    )
+                # PATCH: some providers stream valid output items but
+                # get_final_response() can return empty/null output or raise
+                # before parsing the terminal response object. Backfill from
+                # collected items or synthesize from deltas.
                 _out = getattr(final_response, "output", None)
-                if isinstance(_out, list) and not _out:
+                if _out is None or (isinstance(_out, list) and not _out):
                     if collected_output_items:
                         final_response.output = list(collected_output_items)
                         logger.debug(

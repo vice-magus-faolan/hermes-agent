@@ -786,11 +786,13 @@ class _CodexCompletionsAdapter:
 
         try:
             # Collect output items and text deltas during streaming —
-            # the Codex backend can return empty response.output from
-            # get_final_response() even when items were streamed.
+            # the Codex backend can return empty/null response.output from
+            # get_final_response(), or the SDK can raise while parsing the
+            # terminal response even when items were streamed.
             collected_output_items: List[Any] = []
             collected_text_deltas: List[str] = []
             has_function_calls = False
+            terminal_response: Any = None
             if total_timeout:
                 timeout_timer = threading.Timer(float(total_timeout), _close_client_on_timeout)
                 timeout_timer.daemon = True
@@ -810,12 +812,28 @@ class _CodexCompletionsAdapter:
                             collected_text_deltas.append(_delta)
                     elif "function_call" in _etype:
                         has_function_calls = True
+                    elif _etype in {"response.completed", "response.incomplete", "response.failed"}:
+                        _resp = getattr(_event, "response", None)
+                        if _resp is not None:
+                            terminal_response = _resp
                 _check_cancelled()
-                final = stream.get_final_response()
+                try:
+                    final = stream.get_final_response()
+                except TypeError as exc:
+                    recoverable_null_output = (
+                        str(exc) == "'NoneType' object is not iterable"
+                        and (terminal_response is not None or collected_output_items or collected_text_deltas)
+                    )
+                    if not recoverable_null_output:
+                        raise
+                    final = terminal_response or SimpleNamespace(output=None, usage=None)
+                    logger.debug(
+                        "Codex auxiliary: recovered from null terminal output parse failure via stream backfill"
+                    )
 
             # Backfill empty output from collected stream events
             _output = getattr(final, "output", None)
-            if isinstance(_output, list) and not _output:
+            if _output is None or (isinstance(_output, list) and not _output):
                 if collected_output_items:
                     final.output = list(collected_output_items)
                     logger.debug(

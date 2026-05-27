@@ -2553,6 +2553,46 @@ class TestCodexAuxiliaryAdapterTimeout:
 
         assert time.monotonic() - started < 0.14
 
+    def test_recovers_when_terminal_output_is_null(self):
+        class FakeStream:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, tb):
+                return False
+
+            def __iter__(self):
+                done_item = SimpleNamespace(
+                    type="function_call",
+                    call_id="call_123",
+                    name="demo_tool",
+                    arguments="{}",
+                )
+                terminal_response = SimpleNamespace(output=None, usage=None)
+                return iter([
+                    SimpleNamespace(type="response.output_item.done", item=done_item),
+                    SimpleNamespace(type="response.completed", response=terminal_response),
+                ])
+
+            def get_final_response(self):
+                raise TypeError("'NoneType' object is not iterable")
+
+        class FakeResponses:
+            def stream(self, **kwargs):
+                return FakeStream()
+
+        fake_client = SimpleNamespace(responses=FakeResponses())
+        adapter = _CodexCompletionsAdapter(fake_client, "gpt-5.5")
+
+        response = adapter.create(
+            messages=[{"role": "user", "content": "summarize this"}],
+            timeout=12.5,
+        )
+
+        tool_calls = response.choices[0].message.tool_calls
+        assert len(tool_calls) == 1
+        assert tool_calls[0].function.name == "demo_tool"
+
 
 # ---------------------------------------------------------------------------
 # Issue #23432 — auxiliary timeout poisons cached client; later aux calls fail
