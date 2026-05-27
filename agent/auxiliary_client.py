@@ -802,8 +802,12 @@ class _CodexCompletionsAdapter:
                 for _event in stream:
                     _check_cancelled()
                     _etype = getattr(_event, "type", "")
+                    if not _etype and isinstance(_event, dict):
+                        _etype = _event.get("type", "")
                     if _etype == "response.output_item.done":
                         _done = getattr(_event, "item", None)
+                        if _done is None and isinstance(_event, dict):
+                            _done = _event.get("item")
                         if _done is not None:
                             collected_output_items.append(_done)
                     elif "output_text.delta" in _etype:
@@ -814,6 +818,8 @@ class _CodexCompletionsAdapter:
                         has_function_calls = True
                     elif _etype in {"response.completed", "response.incomplete", "response.failed"}:
                         _resp = getattr(_event, "response", None)
+                        if _resp is None and isinstance(_event, dict):
+                            _resp = _event.get("response")
                         if _resp is not None:
                             terminal_response = _resp
                 _check_cancelled()

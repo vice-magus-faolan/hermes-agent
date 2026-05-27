@@ -205,6 +205,8 @@ def run_codex_stream(agent, api_kwargs: dict, client: Any = None, on_first_delta
                     if agent._interrupt_requested:
                         break
                     event_type = getattr(event, "type", "")
+                    if not event_type and isinstance(event, dict):
+                        event_type = event.get("type", "")
                     # Fire callbacks on text content deltas (suppress during tool calls)
                     if "output_text.delta" in event_type or event_type == "response.output_text.delta":
                         delta_text = getattr(event, "delta", "")
@@ -233,12 +235,16 @@ def run_codex_stream(agent, api_kwargs: dict, client: Any = None, on_first_delta
                     # get_final_response() returns an empty output list.
                     elif event_type == "response.output_item.done":
                         done_item = getattr(event, "item", None)
+                        if done_item is None and isinstance(event, dict):
+                            done_item = event.get("item")
                         if done_item is not None:
                             collected_output_items.append(done_item)
                     # Keep the terminal response object from stream events so
                     # we can recover when the SDK later fails to parse it.
                     elif event_type in {"response.completed", "response.incomplete", "response.failed"}:
                         resp_obj = getattr(event, "response", None)
+                        if resp_obj is None and isinstance(event, dict):
+                            resp_obj = event.get("response")
                         if resp_obj is not None:
                             terminal_response = resp_obj
                         # Log non-completed terminal events for diagnostics
@@ -433,7 +439,7 @@ def run_codex_create_stream_fallback(agent, api_kwargs: dict, client: Any = None
             if terminal_response is not None:
                 # Backfill empty output from collected stream events
                 _out = getattr(terminal_response, "output", None)
-                if isinstance(_out, list) and not _out:
+                if _out is None or (isinstance(_out, list) and not _out):
                     if collected_output_items:
                         terminal_response.output = list(collected_output_items)
                         logger.debug(

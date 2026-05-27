@@ -903,6 +903,47 @@ class TestCodexStreamCallbacks:
         assert response is terminal_response
         assert response.output == [done_item]
 
+    def test_codex_stream_recovers_from_dict_terminal_events_with_null_output(self):
+        from run_agent import AIAgent
+
+        agent = AIAgent(
+            api_key="test-key",
+            base_url="https://openrouter.ai/api/v1",
+            model="test/model",
+            quiet_mode=True,
+            skip_context_files=True,
+            skip_memory=True,
+        )
+        agent.api_mode = "codex_responses"
+        agent._interrupt_requested = False
+
+        done_item = {
+            "type": "function_call",
+            "call_id": "call_456",
+            "name": "demo_tool",
+            "arguments": "{}",
+        }
+        terminal_response = SimpleNamespace(output=None, status="completed")
+
+        mock_stream = MagicMock()
+        mock_stream.__enter__ = MagicMock(return_value=mock_stream)
+        mock_stream.__exit__ = MagicMock(return_value=False)
+        mock_stream.__iter__ = MagicMock(
+            return_value=iter([
+                {"type": "response.output_item.done", "item": done_item},
+                {"type": "response.completed", "response": terminal_response},
+            ])
+        )
+        mock_stream.get_final_response.side_effect = TypeError("'NoneType' object is not iterable")
+
+        mock_client = MagicMock()
+        mock_client.responses.stream.return_value = mock_stream
+
+        response = agent._run_codex_stream({}, client=mock_client)
+
+        assert response is terminal_response
+        assert response.output == [done_item]
+
     def test_codex_remote_protocol_error_falls_back_to_create_stream(self):
         from run_agent import AIAgent
         import httpx
