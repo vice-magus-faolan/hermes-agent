@@ -900,8 +900,8 @@ class TestCodexStreamCallbacks:
 
         response = agent._run_codex_stream({}, client=mock_client)
 
-        assert response is terminal_response
         assert response.output == [done_item]
+        assert response.status == "completed"
 
     def test_codex_stream_recovers_from_dict_terminal_events_with_null_output(self):
         from run_agent import AIAgent
@@ -941,8 +941,8 @@ class TestCodexStreamCallbacks:
 
         response = agent._run_codex_stream({}, client=mock_client)
 
-        assert response is terminal_response
         assert response.output == [done_item]
+        assert response.status == "completed"
 
     def test_codex_remote_protocol_error_falls_back_to_create_stream(self):
         from run_agent import AIAgent
